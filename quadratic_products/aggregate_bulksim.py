@@ -1,5 +1,6 @@
 import numpy as np
 import numpy.ma as ma
+from quadratic_products import pwrspec_estimator as pe
 from quadratic_products import power_spectrum as ps
 import glob
 import copy
@@ -16,7 +17,10 @@ from utils import file_tools
 aggregatesummary_init = {
         "directory": "dir",
         "basefile": "file",
-        "apply_2d_transfer": None,
+        "noiseweights_2dto1d": None,
+        "fix_weight_treatment": None,
+        "apply_2d_beamtransfer": None,
+        "apply_2d_modetransfer": None,
         "outfile": "file"
     }
 
@@ -69,14 +73,29 @@ class AggregateSummary(object):
 
         print "AggregateSummary: treatment cases: ", sim_toread.treatment_cases
 
-        if self.params["apply_2d_transfer"] is not None:
-            trans_shelve = shelve.open(self.params["apply_2d_transfer"])
-            transfer_2d = trans_shelve["transfer_2d"]
-            trans_shelve.close()
+        # load the transfer functions and 2d->1d noise weights
+        transfer_dict = pe.load_transferfunc(
+                            self.params["apply_2d_beamtransfer"],
+                            self.params["apply_2d_modetransfer"],
+                            sim_toread.treatment_cases)
 
-            transfer_dict = {}
+        weights_2d = None
+        if self.params["noiseweights_2dto1d"] is not None:
+            print "applying 2D noise weights: " + \
+                self.params["noiseweights_2dto1d"]
+
+            weightfile = h5py.File(self.params["noiseweights_2dto1d"], "r")
+            weights_2d = {}
             for treatment in sim_toread.treatment_cases:
-                transfer_dict[treatment] = transfer_2d
+                if self.params["fix_weight_treatment"] is not None:
+                    fixed_treatment = self.params["fix_weight_treatment"]
+                    print "fixing weight for %s to value at %s" % \
+                            (treatment, fixed_treatment)
+                    weights_2d[treatment] = weightfile[fixed_treatment].value
+                else:
+                    weights_2d[treatment] = weightfile[treatment].value
+
+            weightfile.close()
 
         result_dict = {}
         for treatment in sim_toread.treatment_cases:
@@ -84,6 +103,8 @@ class AggregateSummary(object):
             trial_array_1d = np.zeros((num_sim, num_k_1d))
             trial_array_1d_from_2d = np.zeros((num_sim, num_k_1d_from_2d))
             trial_array_2d = np.zeros((num_sim, num_kx, num_ky))
+            error_array_1d = np.zeros((num_sim, num_k_1d))
+            error_array_1d_from_2d = np.zeros((num_sim, num_k_1d_from_2d))
             counts_array_1d = np.zeros((num_sim, num_k_1d))
             counts_array_1d_from_2d = np.zeros((num_sim, num_k_1d_from_2d))
             counts_array_2d = np.zeros((num_sim, num_kx, num_ky))
@@ -91,22 +112,30 @@ class AggregateSummary(object):
                 print treatment, simfile, index
                 sim_toread = ps.PowerSpectrum(simfile)
 
-                if self.params["apply_2d_transfer"] is not None:
-                    sim_toread.apply_2d_trans_by_treatment(transfer_dict)
+                sim_toread.apply_2d_trans_by_treatment(transfer_dict)
 
-                sim_toread.convert_2d_to_1d()
+                sim_toread.convert_2d_to_1d(weights_2d=weights_2d)
 
                 agg1d = sim_toread.agg_stat_1d_pwrspec()
                 agg1d_from_2d = sim_toread.agg_stat_1d_pwrspec(from_2d=True)
                 agg2d = sim_toread.agg_stat_2d_pwrspec()
 
+                # accumulate the means
                 trial_array_1d[index, :] = agg1d[treatment]['mean']
 
                 trial_array_1d_from_2d[index, :] = \
                                             agg1d_from_2d[treatment]['mean']
 
+                # accumulate the std across 6 pairs
+                error_array_1d[index, :] = agg1d[treatment]['std']
+
+                error_array_1d_from_2d[index, :] = \
+                                            agg1d_from_2d[treatment]['std']
+
+                # accumulate the 2D powers
                 trial_array_2d[index, :, :] = agg2d[treatment]['mean']
 
+                # accumulate the counts arrays
                 counts_array_1d[index, :] = agg1d[treatment]['counts']
 
                 counts_array_1d_from_2d[index, :] = \
@@ -120,11 +149,17 @@ class AggregateSummary(object):
 
                 del sim_toread
 
+            # package all the simulations of a given treatment
             treatment_dict["pk_1d"] = copy.deepcopy(trial_array_1d)
             treatment_dict["pk_1d_from_2d"] = \
                             copy.deepcopy(trial_array_1d_from_2d)
 
+            treatment_dict["pkstd_1d"] = copy.deepcopy(error_array_1d)
+            treatment_dict["pkstd_1d_from_2d"] = \
+                            copy.deepcopy(error_array_1d_from_2d)
+
             treatment_dict["pk_2d"] = copy.deepcopy(trial_array_2d)
+
             treatment_dict["counts_1d"] = copy.deepcopy(counts_array_1d)
             treatment_dict["counts_1d_from_2d"] = \
                             copy.deepcopy(counts_array_1d_from_2d)
@@ -132,6 +167,7 @@ class AggregateSummary(object):
             treatment_dict["counts_2d"] = copy.deepcopy(counts_array_2d)
             result_dict[treatment] = treatment_dict
 
+        # package all simulations of all treatments into a file
         outshelve = shelve.open(outfile, "n", protocol=-1)
         outshelve["k_1d"] = k_1d
         outshelve["k_1d_from_2d"] = k_1d_from_2d
@@ -139,6 +175,7 @@ class AggregateSummary(object):
         outshelve["ky_2d"] = ky_2d
         outshelve["results"] = result_dict
         outshelve.close()
+
 
 aggregatestatistics_init = {
         "shelvefile": "file",
@@ -154,7 +191,7 @@ class AggregateStatistics(object):
     TODO: have this write plots out to uniform directories
     """
     def __init__(self, parameter_file=None, params_dict=None, feedback=0,
-                 make_plot=False):
+                 make_plot=True):
         self.params = params_dict
         np.seterr(under='raise')
         self.make_plot = make_plot
@@ -174,16 +211,18 @@ class AggregateStatistics(object):
         stat_results = {}
         for treatment in self.treatments:
             stat_summary = {}
-            (stat_1d, counts_1d) = self.aggregate_1d_statistics(treatment,
-                                                                from2d=False)
+            (stat_1d, error_stat_1d, counts_1d) = \
+                    self.aggregate_1d_statistics(treatment, from2d=False)
 
             stat_summary["pk_1d_stat"] = stat_1d
+            stat_summary["pk_1d_errstat"] = error_stat_1d
             stat_summary["pk_1d_counts"] = counts_1d
 
-            (stat_1d, counts_1d) = self.aggregate_1d_statistics(treatment,
-                                                                from2d=True)
+            (stat_1d, error_stat_1d, counts_1d) = \
+                    self.aggregate_1d_statistics(treatment, from2d=True)
 
             stat_summary["pk_1d_from_2d_stat"] = stat_1d
+            stat_summary["pk_1d_from_2d_errstat"] = error_stat_1d
             stat_summary["pk_1d_from_2d_counts"] = counts_1d
 
             (stat_2d, counts_2d) = self.aggregate_2d_statistics(treatment)
@@ -198,7 +237,7 @@ class AggregateStatistics(object):
 
         self.summary.close()
 
-    def calc_stat_1d(self, trial_array, calc_corr=False):
+    def calc_stat_1d(self, trial_array, calc_corr=True):
         """take an 1D array of power spectra and find some basic statistics
         on it"""
         stat_1d = {}
@@ -233,6 +272,7 @@ class AggregateStatistics(object):
         if from2d:
             k_1d = self.summary["k_1d_from_2d"]
             trial_array_1d = results["pk_1d_from_2d"]
+            error_array_1d = results["pkstd_1d_from_2d"]
             counts_array_1d = results["counts_1d_from_2d"]
 
             outfile = "%s/power_1d_from_2d_%s.dat" % \
@@ -240,12 +280,14 @@ class AggregateStatistics(object):
         else:
             k_1d = self.summary["k_1d"]
             trial_array_1d = results["pk_1d"]
+            error_array_1d = results["pkstd_1d"]
             counts_array_1d = results["counts_1d"]
 
             outfile = "%s/power_1d_%s.dat" % \
                       (self.params['outputdir'], treatment)
 
         stat_1d = self.calc_stat_1d(trial_array_1d)
+        error_stat_1d = self.calc_stat_1d(error_array_1d)
         counts_1d = self.calc_stat_1d(counts_array_1d)
 
         file_tools.print_multicolumn(k_1d["left"],
@@ -254,6 +296,7 @@ class AggregateStatistics(object):
                                      counts_1d["mean"],
                                      stat_1d["mean"],
                                      stat_1d["std"],
+                                     error_stat_1d["mean"],
                                      outfile=outfile)
 
         logk_1d = np.log10(k_1d['center'])
@@ -272,7 +315,7 @@ class AggregateStatistics(object):
                                      ["logk", "logk"], 1.,
                                      "1D covariance", "cov")
 
-        return (stat_1d, counts_1d)
+        return (stat_1d, error_stat_1d, counts_1d)
 
     def calc_stat_2d(self, trial_array, calc_corr=False):
         stat_2d = {}
@@ -330,13 +373,13 @@ class AggregateStatistics(object):
                                      logscale=False)
 
             # can use C or F to do column or row-major
-            outplot_file = "%s/sim_corr_2d_%s.png" % \
-                      (self.params['outputdir'], treatment)
-            plot_slice.simpleplot_2D(outplot_file, stat_2d['corr'],
-                                     stat_2d['flat_axis'],
-                                     stat_2d['flat_axis'],
-                                     ["k", "k"], 1.,
-                                     "2D power corr", "corr")
+            #outplot_file = "%s/sim_corr_2d_%s.png" % \
+            #          (self.params['outputdir'], treatment)
+            #plot_slice.simpleplot_2D(outplot_file, stat_2d['corr'],
+            #                         stat_2d['flat_axis'],
+            #                         stat_2d['flat_axis'],
+            #                         ["k", "k"], 1.,
+            #                         "2D power corr", "corr")
 
         return (stat_2d, counts_2d)
 
