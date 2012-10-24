@@ -17,3 +17,4 @@ References:
 
 * "Measurement of 21 cm brightness fluctuations at z ~ 0.8 in cross-correlation": `http://adsabs.harvard.edu/abs/2012arXiv1208.0331M`
 
+Note that `https://github.com/kiyo-masui/analysis_IM` has more incremental development.
