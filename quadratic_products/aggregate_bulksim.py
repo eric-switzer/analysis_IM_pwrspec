@@ -9,6 +9,7 @@ import shelve
 import h5py
 from kiyopy import parse_ini
 from utils import file_tools
+import shutil
 # TODO: better interaction between mask and counts
 # TODO: make object like AggregateSummary that recompiles the physical sims
 # TODO: call AggregateStatistics on the physical sims, make plots
@@ -100,86 +101,74 @@ class AggregateSummary(object):
         result_dict = {}
         for treatment in sim_toread.treatment_cases:
             treatment_dict = {}
-            trial_array_1d = np.zeros((num_sim, num_k_1d))
-            trial_array_1d_from_2d = np.zeros((num_sim, num_k_1d_from_2d))
-            trial_array_2d = np.zeros((num_sim, num_kx, num_ky))
-            error_array_1d = np.zeros((num_sim, num_k_1d))
-            error_array_1d_from_2d = np.zeros((num_sim, num_k_1d_from_2d))
-            counts_array_1d = np.zeros((num_sim, num_k_1d))
-            counts_array_1d_from_2d = np.zeros((num_sim, num_k_1d_from_2d))
-            counts_array_2d = np.zeros((num_sim, num_kx, num_ky))
-            for (simfile, index) in zip(filelist, range(num_sim)):
-                print treatment, simfile, index
-                sim_toread = ps.PowerSpectrum(simfile)
-
-                sim_toread.apply_2d_trans_by_treatment(transfer_dict)
-
-                sim_toread.convert_2d_to_1d(weights_2d=weights_2d)
-
-                agg1d = sim_toread.agg_stat_1d_pwrspec()
-                agg1d_from_2d = sim_toread.agg_stat_1d_pwrspec(from_2d=True)
-                agg2d = sim_toread.agg_stat_2d_pwrspec()
-
-                # accumulate the means
-                trial_array_1d[index, :] = agg1d[treatment]['mean']
-
-                trial_array_1d_from_2d[index, :] = \
-                                            agg1d_from_2d[treatment]['mean']
-
-                # accumulate the std across 6 pairs
-                error_array_1d[index, :] = agg1d[treatment]['std']
-
-                error_array_1d_from_2d[index, :] = \
-                                            agg1d_from_2d[treatment]['std']
-
-                # accumulate the 2D powers
-                trial_array_2d[index, :, :] = agg2d[treatment]['mean']
-
-                # accumulate the counts arrays
-                counts_array_1d[index, :] = agg1d[treatment]['counts']
-
-                counts_array_1d_from_2d[index, :] = \
-                                            agg1d_from_2d[treatment]['counts']
-
-                counts_array_2d[index, :, :] = agg2d[treatment]['counts']
-
-                if debug:
-                    nanarray = np.isnan(trial_array_2d[index, :, :])
-                    print "is nan", np.sum(nanarray)
-
-                del sim_toread
-
-            # package all the simulations of a given treatment
-            treatment_dict["pk_1d"] = copy.deepcopy(trial_array_1d)
+            treatment_dict["pk_1d"] = np.zeros((num_sim, num_k_1d))
             treatment_dict["pk_1d_from_2d"] = \
-                            copy.deepcopy(trial_array_1d_from_2d)
+                        np.zeros((num_sim, num_k_1d_from_2d))
 
-            treatment_dict["pkstd_1d"] = copy.deepcopy(error_array_1d)
+            treatment_dict["pkstd_1d"] = np.zeros((num_sim, num_k_1d))
             treatment_dict["pkstd_1d_from_2d"] = \
-                            copy.deepcopy(error_array_1d_from_2d)
+                        np.zeros((num_sim, num_k_1d_from_2d))
 
-            treatment_dict["pk_2d"] = copy.deepcopy(trial_array_2d)
+            treatment_dict["pk_2d"] = np.zeros((num_sim, num_kx, num_ky))
 
-            treatment_dict["counts_1d"] = copy.deepcopy(counts_array_1d)
+            treatment_dict["counts_1d"] = np.zeros((num_sim, num_k_1d))
             treatment_dict["counts_1d_from_2d"] = \
-                            copy.deepcopy(counts_array_1d_from_2d)
+                        np.zeros((num_sim, num_k_1d_from_2d))
 
-            treatment_dict["counts_2d"] = copy.deepcopy(counts_array_2d)
+            treatment_dict["counts_2d"] = np.zeros((num_sim, num_kx, num_ky))
             result_dict[treatment] = treatment_dict
 
+        for (simfile, index) in zip(filelist, range(num_sim)):
+            print "processing ", simfile, index
+            sim_toread = ps.PowerSpectrum(simfile)
+            sim_toread.apply_2d_trans_by_treatment(transfer_dict)
+            sim_toread.convert_2d_to_1d(weights_2d=weights_2d)
+
+            agg1d = sim_toread.agg_stat_1d_pwrspec()
+            agg1d_from_2d = sim_toread.agg_stat_1d_pwrspec(from_2d=True)
+            agg2d = sim_toread.agg_stat_2d_pwrspec()
+
+            for treatment in sim_toread.treatment_cases:
+                result_dict[treatment]["pk_1d"][index, :] = \
+                                            agg1d[treatment]['mean']
+
+                result_dict[treatment]["pk_1d_from_2d"][index, :] = \
+                                            agg1d_from_2d[treatment]['mean']
+
+                result_dict[treatment]["pkstd_1d"][index, :] = \
+                                            agg1d[treatment]['std']
+
+                result_dict[treatment]["pkstd_1d_from_2d"][index, :] = \
+                                            agg1d_from_2d[treatment]['std']
+
+                result_dict[treatment]["pk_2d"][index, :, :] = \
+                                            agg2d[treatment]['mean']
+
+                result_dict[treatment]["counts_1d"][index, :] = \
+                                            agg1d[treatment]['counts']
+
+                result_dict[treatment]["counts_1d_from_2d"][index, :] = \
+                                            agg1d_from_2d[treatment]['counts']
+
+                result_dict[treatment]["counts_2d"][index, :, :] = \
+                                            agg2d[treatment]['counts']
+
         # package all simulations of all treatments into a file
-        outshelve = shelve.open(outfile, "n", protocol=-1)
-        outshelve["k_1d"] = k_1d
-        outshelve["k_1d_from_2d"] = k_1d_from_2d
-        outshelve["kx_2d"] = kx_2d
-        outshelve["ky_2d"] = ky_2d
-        outshelve["results"] = result_dict
-        outshelve.close()
+        #out_dicttree = shelve.open(outfile, "n", protocol=-1)
+        out_dicttree = {}
+        out_dicttree["k_1d"] = k_1d
+        out_dicttree["k_1d_from_2d"] = k_1d_from_2d
+        out_dicttree["kx_2d"] = kx_2d
+        out_dicttree["ky_2d"] = ky_2d
+        out_dicttree["results"] = result_dict
+        file_tools.convert_numpytree_hdf5(out_dicttree, outfile)
+        #out_dicttree.close()
 
 
 aggregatestatistics_init = {
-        "shelvefile": "file",
-        "outputdir": "dir",
+        "aggfile_in": "file.hd5",
+        "statfile_out": "data.hd5",
+        "outplotdir": "dir"
     }
 
 aggregatestatistics_prefix = 'ast_'
@@ -201,7 +190,8 @@ class AggregateStatistics(object):
                                           aggregatestatistics_init,
                                           prefix=aggregatestatistics_prefix)
 
-        self.summary = shelve.open(self.params["shelvefile"])
+        print "opening: ", self.params["aggfile_in"]
+        self.summary = h5py.File(self.params["aggfile_in"], "r")
         # get the list of treatments
         self.treatments = self.summary["results"].keys()
         print "AggregateStatistics: treatment cases: ", self.treatments
@@ -230,12 +220,22 @@ class AggregateStatistics(object):
             stat_summary["pk_2d_stat"] = stat_2d
             stat_summary["pk_2d_counts"] = counts_2d
 
+            stat_summary["k_1d"] = self.summary["k_1d"]["center"].value
+            stat_summary["k_1d_from_2d"] = \
+                    self.summary["k_1d_from_2d"]["center"].value
+
+            stat_summary["kx_2d"] = self.summary["kx_2d"]["center"].value
+            stat_summary["ky_2d"] = self.summary["ky_2d"]["center"].value
+
             stat_results[treatment] = copy.deepcopy(stat_summary)
 
-        self.summary["stats"] = stat_results
-        print self.summary["stats"]["0modes"].keys()
+        # in shelve file model
+        #self.summary["stats"] = stat_results
+        #print self.summary["stats"]["0modes"].keys()
 
         self.summary.close()
+        file_tools.convert_numpytree_hdf5(stat_results,
+                                          self.params["statfile_out"])
 
     def calc_stat_1d(self, trial_array, calc_corr=True):
         """take an 1D array of power spectra and find some basic statistics
@@ -271,28 +271,28 @@ class AggregateStatistics(object):
 
         if from2d:
             k_1d = self.summary["k_1d_from_2d"]
-            trial_array_1d = results["pk_1d_from_2d"]
-            error_array_1d = results["pkstd_1d_from_2d"]
-            counts_array_1d = results["counts_1d_from_2d"]
+            trial_array_1d = results["pk_1d_from_2d"].value
+            error_array_1d = results["pkstd_1d_from_2d"].value
+            counts_array_1d = results["counts_1d_from_2d"].value
 
             outfile = "%s/power_1d_from_2d_%s.dat" % \
-                      (self.params['outputdir'], treatment)
+                      (self.params['outplotdir'], treatment)
         else:
             k_1d = self.summary["k_1d"]
-            trial_array_1d = results["pk_1d"]
-            error_array_1d = results["pkstd_1d"]
-            counts_array_1d = results["counts_1d"]
+            trial_array_1d = results["pk_1d"].value
+            error_array_1d = results["pkstd_1d"].value
+            counts_array_1d = results["counts_1d"].value
 
             outfile = "%s/power_1d_%s.dat" % \
-                      (self.params['outputdir'], treatment)
+                      (self.params['outplotdir'], treatment)
 
         stat_1d = self.calc_stat_1d(trial_array_1d)
         error_stat_1d = self.calc_stat_1d(error_array_1d)
         counts_1d = self.calc_stat_1d(counts_array_1d)
 
-        file_tools.print_multicolumn(k_1d["left"],
-                                     k_1d["center"],
-                                     k_1d["right"],
+        file_tools.print_multicolumn(k_1d["left"].value,
+                                     k_1d["center"].value,
+                                     k_1d["right"].value,
                                      counts_1d["mean"],
                                      stat_1d["mean"],
                                      stat_1d["std"],
@@ -302,14 +302,14 @@ class AggregateStatistics(object):
         logk_1d = np.log10(k_1d['center'])
         if self.make_plot:
             outplot_file = "%s/sim_corr_1d_%s.png" % \
-                           (self.params['outputdir'], treatment)
+                           (self.params['outplotdir'], treatment)
             plot_slice.simpleplot_2D(outplot_file, stat_1d['corr'],
                                      logk_1d, logk_1d,
                                      ["logk", "logk"], 1.,
                                      "1D corr", "corr")
 
             outplot_file = "%s/sim_cov_1d_%s.png" % \
-                           (self.params['outputdir'], treatment)
+                           (self.params['outplotdir'], treatment)
             plot_slice.simpleplot_2D(outplot_file, stat_1d['cov'],
                                      logk_1d, logk_1d,
                                      ["logk", "logk"], 1.,
@@ -351,7 +351,7 @@ class AggregateStatistics(object):
         trial_array_2d = self.summary["results"][treatment]["pk_2d"]
         counts_array_2d = self.summary["results"][treatment]["counts_2d"]
         outfile = "%s/power_2d_%s.dat" % \
-                  (self.params['outputdir'], treatment)
+                  (self.params['outplotdir'], treatment)
 
         stat_2d = self.calc_stat_2d(trial_array_2d)
         counts_2d = self.calc_stat_2d(counts_array_2d)
@@ -365,7 +365,7 @@ class AggregateStatistics(object):
 
         if self.make_plot:
             outplot_file = "%s/sim_mean_2d_%s.png" % \
-                      (self.params['outputdir'], treatment)
+                      (self.params['outplotdir'], treatment)
             plot_slice.simpleplot_2D(outplot_file, stat_2d['mean'],
                                      logkx, logky,
                                      ["logkx", "logky"], 1.,
@@ -374,7 +374,7 @@ class AggregateStatistics(object):
 
             # can use C or F to do column or row-major
             #outplot_file = "%s/sim_corr_2d_%s.png" % \
-            #          (self.params['outputdir'], treatment)
+            #          (self.params['outplotdir'], treatment)
             #plot_slice.simpleplot_2D(outplot_file, stat_2d['corr'],
             #                         stat_2d['flat_axis'],
             #                         stat_2d['flat_axis'],
@@ -384,22 +384,63 @@ class AggregateStatistics(object):
         return (stat_2d, counts_2d)
 
 
-calculatetransfer_init = {
-        "shelvefile_in": "file",
-        "shelvefile_out": "file",
-        "shelvedatalike_out": "file",
-        "transferfile": "file",
-        "outputdir": "dir",
+subtractmap_init = {
+        "plussim_file": "file",
+        "mappower_file": "file",
+        "output_file": "file"
     }
+subtractmap_prefix = 'sub_'
 
+
+class SubtractMap(object):
+    """Input: clean(map+sim)xclean(map+sim), clean(map)xclean(map)
+    subtract these for the purpose of finding the transfer funcion
+    """
+
+    def __init__(self, parameter_file=None, params_dict=None, feedback=0):
+        self.params = params_dict
+        np.seterr(invalid='raise')
+
+        if parameter_file:
+            self.params = parse_ini.parse(parameter_file,
+                                          subtractmap_init,
+                                          prefix=subtractmap_prefix)
+
+        print self.params["plussim_file"], "-", self.params["mappower_file"]
+        print "writing to ", self.params["output_file"]
+
+    def execute(self, processes):
+        shutil.copyfile(self.params["plussim_file"], self.params["output_file"])
+        outfile = h5py.File(self.params["output_file"], "r+")
+        pwr_map = ps.PowerSpectrum(self.params["mappower_file"])
+
+        signal2d_agg = pwr_map.agg_stat_2d_pwrspec()
+        print signal2d_agg.keys()
+
+        for treatment in outfile:
+            plussim_power = \
+                copy.deepcopy(outfile[treatment]['pk_2d_stat']['mean'].value)
+
+            map_power = signal2d_agg[treatment]["mean"]
+            del outfile[treatment]['pk_2d_stat']['mean']
+
+            outfile[treatment]['pk_2d_stat']['mean'] = plussim_power - \
+                                                       map_power
+
+        outfile.close()
+
+
+calculatetransfer_init = {
+        "powerfile_in": "file",
+        "powerfile_out": "file",
+        "transferfile": "file",
+        "outplotdir": "dir",
+    }
 calculatetransfer_prefix = 'atr_'
 
 
 class CalculateTransfer(object):
-    """Calculate a transfer function in 1d/2d
-    The shelve files in can either be those produced by AggregateSummary above,
-    (in the case that they are many sims for each
-    TODO: add 1D transfer if we ever need it
+    """Calculate a transfer function in 2d
     """
 
     def __init__(self, parameter_file=None, params_dict=None, feedback=0):
@@ -411,16 +452,12 @@ class CalculateTransfer(object):
                                           calculatetransfer_init,
                                           prefix=calculatetransfer_prefix)
 
-        print self.params["shelvefile_in"], "->", self.params["shelvefile_out"]
+        print self.params["powerfile_in"], "->", self.params["powerfile_out"]
 
-        print "saving sims to data-like file: ", \
-              self.params["shelvedatalike_out"]
-
-        self.stats_in = shelve.open(self.params["shelvefile_in"], "r")
-        self.stats_dataout = shelve.open(self.params["shelvedatalike_out"])
-        self.stats_out = shelve.open(self.params["shelvefile_out"], "w")
-        self.treatments_in = self.stats_in["results"].keys()
-        self.treatments_out = self.stats_out["results"].keys()
+        self.stats_in = h5py.File(self.params["powerfile_in"], "r")
+        self.stats_out = h5py.File(self.params["powerfile_out"], "r")
+        self.treatments_in = self.stats_in.keys()
+        self.treatments_out = self.stats_out.keys()
 
         # If this is measuring the mode cleaning transfer function, it will be
         # with respect to the 0modes removed case. Note that map+sim (with zero
@@ -436,47 +473,86 @@ class CalculateTransfer(object):
 
     def execute(self, processes):
         """produce a list of files to combine and run"""
-        transfer_compilation = {}
+        transferfile = h5py.File(self.params["transferfile"], "w")
+        inkey = self.treatments_in[0]
         for treatment in self.treatments_out:
-            print treatment
-            print self.stats_out["results"][treatment].keys()
 
-            stat_in = self.stats_in["stats"]
-            stat_out = self.stats_out["stats"]
-
-            stats_1d_in = stat_in["0modes"]["pk_1d_stat"]["mean"]
-            stats_1d_out = stat_out[treatment]["pk_1d_stat"]["mean"]
-            stats_2d_in = stat_in["0modes"]["pk_2d_stat"]["mean"]
-            stats_2d_out = stat_out[treatment]["pk_2d_stat"]["mean"]
-
-            counts_1d_in = stat_in["0modes"]["pk_1d_counts"]["mean"]
-            counts_1d_out = stat_out[treatment]["pk_1d_counts"]["mean"]
-            counts_2d_in = stat_in["0modes"]["pk_2d_counts"]["mean"]
-            counts_2d_out = stat_out[treatment]["pk_2d_counts"]["mean"]
+            stats_2d_in = self.stats_in[inkey]["pk_2d_stat"]["mean"].value
+            stats_2d_out = self.stats_out[treatment]["pk_2d_stat"]["mean"].value
+            counts_2d_in = self.stats_in[inkey]["pk_2d_counts"]["mean"].value
+            counts_2d_out = self.stats_out[treatment]["pk_2d_counts"]["mean"].value
 
             counts_prod = counts_2d_in * counts_2d_out
             transfer_2d = stats_2d_out / stats_2d_in
             transfer_2d[counts_prod == 0] = 0.
-
-            k_1d = self.stats_in["k_1d"]
-            k_1d_from_2d = self.stats_in["k_1d_from_2d"]
-            kx_2d = self.stats_in["kx_2d"]
-            ky_2d = self.stats_in["ky_2d"]
+            transferfile[treatment] = transfer_2d
 
             transfer_2d_plot = copy.deepcopy(transfer_2d)
             transfer_2d_plot[transfer_2d_plot < 0.] = 0.
             transfer_2d_plot[transfer_2d_plot > 1.] = 1.
 
             outplot_file = "%s/transfer_2d_%s.png" % \
-                           (self.params['outputdir'], treatment)
+                           (self.params['outplotdir'], treatment)
 
-            logkx = np.log10(kx_2d['center'])
-            logky = np.log10(ky_2d['center'])
-
+            print "plotting trans to ", outplot_file
+            logkx = np.log10(self.stats_in[inkey]["kx_2d"].value)
+            logky = np.log10(self.stats_in[inkey]["ky_2d"].value)
             plot_slice.simpleplot_2D(outplot_file, transfer_2d_plot,
                                      logkx, logky,
                                      ["logkx", "logky"], 1.,
                                      "2D beam transfer", "T")
+
+        transferfile.close()
+        self.stats_in.close()
+        self.stats_out.close()
+
+
+calculatedatalike_init = {
+        "powerfile": "file",
+        "powerdatalike_out": "file",
+    }
+calculatedatalike_prefix = 'cdl_'
+
+
+class CalculateDatalike(object):
+    """Reformat aggregated simulations to look like data (vestigial?)
+    """
+
+    def __init__(self, parameter_file=None, params_dict=None, feedback=0):
+        self.params = params_dict
+        np.seterr(invalid='raise')
+
+        if parameter_file:
+            self.params = parse_ini.parse(parameter_file,
+                                          calculatedatalike_init,
+                                          prefix=calculatedatalike_prefix)
+
+        print self.params["powerfile_in"], "->", self.params["powerdatalike_out"]
+
+        self.stats_in = h5py.File(self.params["powerfile"], "r")
+        self.treatments_in = self.stats_in["results"].keys()
+
+        # maybe make this hd5?
+        self.stats_dataout = shelve.open(self.params["powerdatalike_out"], "w")
+        #file_tools.convert_numpytree_hdf5(out_dicttree, outfile)
+
+    def execute(self, processes):
+        """produce a list of files to combine and run"""
+        for treatment in self.treatments_in:
+            print treatment
+            print self.stats_in["results"][treatment].keys()
+
+            stat_in = self.stats_in["stats"]
+
+            stats_1d_in = stat_in["0modes"]["pk_1d_stat"]["mean"]
+            stats_2d_in = stat_in["0modes"]["pk_2d_stat"]["mean"]
+            counts_1d_in = stat_in["0modes"]["pk_1d_counts"]["mean"]
+            counts_2d_in = stat_in["0modes"]["pk_2d_counts"]["mean"]
+
+            k_1d = self.stats_in["k_1d"]
+            k_1d_from_2d = self.stats_in["k_1d_from_2d"]
+            kx_2d = self.stats_in["kx_2d"]
+            ky_2d = self.stats_in["ky_2d"]
 
             # make a package that looks like the data
             pwrspec2d_product = {}
@@ -486,31 +562,19 @@ class CalculateTransfer(object):
             pwrspec2d_product["bin_y_left"] = ky_2d["left"]
             pwrspec2d_product["bin_y_center"] = ky_2d["center"]
             pwrspec2d_product["bin_y_right"] = ky_2d["right"]
-            pwrspec2d_product["counts_histo"] = counts_2d_out
-            pwrspec2d_product["binavg"] = stats_2d_out
+            pwrspec2d_product["counts_histo"] = counts_2d_in
+            pwrspec2d_product["binavg"] = stats_2d_in
 
             pwrspec1d_product = {}
             pwrspec1d_product["bin_left"] = k_1d["left"]
             pwrspec1d_product["bin_center"] = k_1d["center"]
             pwrspec1d_product["bin_right"] = k_1d["right"]
-            pwrspec1d_product["counts_histo"] = counts_1d_out
-            pwrspec1d_product["binavg"] = stats_1d_out
+            pwrspec1d_product["counts_histo"] = counts_1d_in
+            pwrspec1d_product["binavg"] = stats_1d_in
 
             datakey = "data:%s" % treatment
             self.stats_dataout[datakey] = (0, (pwrspec2d_product,
                                                pwrspec1d_product))
 
-            transfer_compilation[treatment] = transfer_2d
-
-        #transferfile = shelve.open(self.params["transferfile"], protocol=0)
-        #transferfile["transfer_2d"] = transfer_compilation
-
-        transferfile = h5py.File(self.params["transferfile"], "w")
-        for treatment in self.treatments_out:
-            transferfile[treatment] = transfer_compilation[treatment]
-
-        transferfile.close()
-
         self.stats_in.close()
         self.stats_dataout.close()
-        self.stats_out.close()
