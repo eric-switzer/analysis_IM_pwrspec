@@ -8,8 +8,11 @@ run_vimdiff = False
 
 matches = []
 for root, dirnames, filenames in os.walk('.'):
-  for filename in fnmatch.filter(filenames, '*.py'):
-      matches.append(os.path.join(root, filename))
+    for filename in fnmatch.filter(filenames, '*.py'):
+        matches.append(os.path.join(root, filename))
+
+    for filename in fnmatch.filter(filenames, '*.ini'):
+        matches.append(os.path.join(root, filename))
 
 for filename in matches:
     local_file = filename[2:]
@@ -24,8 +27,11 @@ for filename in matches:
 
 rev_matches = []
 for root, dirnames, filenames in os.walk(cmp_path):
-  for filename in fnmatch.filter(filenames, '*.py'):
-      rev_matches.append(os.path.join(root, filename))
+    for filename in fnmatch.filter(filenames, '*.py'):
+        rev_matches.append(os.path.join(root, filename))
+
+    for filename in fnmatch.filter(filenames, '*.ini'):
+        rev_matches.append(os.path.join(root, filename))
 
 #for filename in rev_matches:
 #    local_file = filename[2:]
